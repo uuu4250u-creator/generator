@@ -531,12 +531,6 @@ export const {function_name} = async ({param_str}): Promise<ResponseBody<{respon
     def _to_camel(self, text: str) -> str:
         text = text.replace('/', '_').replace('-', '_')
         parts = [p for p in text.split('_') if p]
-        deduped_parts = []
-        for part in parts:
-            if deduped_parts and deduped_parts[-1].lower() == part.lower():
-                continue
-            deduped_parts.append(part)
-        parts = deduped_parts
         if not parts:
             return 'fn'
         first = parts[0].lower()
@@ -549,19 +543,6 @@ export const {function_name} = async ({param_str}): Promise<ResponseBody<{respon
             rest_tokens.append(''.join(sp[:1].upper() + sp[1:].lower() for sp in subparts))
         candidate = first + ''.join(rest_tokens)
         return self._normalize_identifier(candidate)
-
-    def _normalize_module_alias(self, module_name: str, used_aliases: Set[str], index: int) -> str:
-        ascii_only = ''.join(ch if ch.isalnum() else '_' for ch in module_name)
-        ascii_only = ''.join(ch for ch in ascii_only if ch.isascii())
-        ascii_only = ascii_only.strip('_')
-        alias_base = self._to_camel(ascii_only) if ascii_only else f'module{index}'
-        alias = alias_base
-        i = 2
-        while alias in used_aliases:
-            alias = f'{alias_base}{i}'
-            i += 1
-        used_aliases.add(alias)
-        return alias
 
     def _build_short_name(self, path: str, method: str) -> str:
         segs = [s for s in path.strip('/').split('/') if s]
@@ -782,8 +763,6 @@ export const {function_name} = async (...args: any[]): Promise<ResponseBody<any>
 
         # 为每个模块生成代码，包括类型导入
         module_codes = {}
-        module_aliases = {}
-        used_aliases: Set[str] = set()
         for module_name, apis in modules.items():
             if not apis:
                 continue
@@ -814,18 +793,11 @@ import type {{ ResponseBody }} from '{self.request_import_path}';
 {import_statement}
 {chr(10).join(apis)}
 """
-            module_key = clean_module_name.lower()
-            module_codes[module_key] = module_code
-            module_aliases[module_key] = self._normalize_module_alias(
-                module_name,
-                used_aliases,
-                len(module_aliases) + 1,
-            )
+            module_codes[clean_module_name.lower()] = module_code
 
         self._module_counts = {
             module_name: len(apis) for module_name, apis in modules.items() if apis
         }
-        self._module_aliases = module_aliases
         return module_codes
 
     def _convert_path_to_url(self, path: str) -> str:
@@ -977,13 +949,11 @@ import type {{ ResponseBody }} from '{self.request_import_path}';
             "export * from './types';",
         ]
 
-        module_aliases = getattr(self, '_module_aliases', {})
         for filename in module_codes.keys():
-            alias = module_aliases.get(filename, filename)
             # 改为命名空间导出，解决不同模块间函数重名导致的 index.ts 编译错误
             # 使用者可以通过 import { ModuleName } from '@/api' 访问
             # 或者直接 import { func } from '@/api/ModuleName'
-            index_exports.append(f"export * as {alias} from './{filename}';")
+            index_exports.append(f"export * as {filename} from './{filename}';")
 
         with open(os.path.join(output_dir, 'index.ts'), 'w', encoding='utf-8') as f:
             f.write('\n'.join(index_exports))
